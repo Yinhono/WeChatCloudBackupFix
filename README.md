@@ -1,33 +1,56 @@
-# 微信云备份修复（Xposed 模块）
+# WeChatCloudBackupFix
 
-让小米云备份可以备份 Play 版微信 / QQ 的数据。
+让小米云备份重新备份 Play 版微信和 QQ 的数据。
 
-## 根因
+小米云备份里有个不大讲理的判定：微信只要是分体包（split APK）安装的，就被判为「不支持备份」，备份列表里连微信数据这一项都不出现。从 Google Play 装的微信走的是 App Bundle 分发，装机必然带一串配置分体包，于是永远被误伤；国内渠道的单 APK 版本则一切正常。这个模块就是把这个误判绕过去。
 
-逆向自 `com.miui.cloudbackup` 1.12.1.6.62.3（萤提供的 APK）：
+已在真机验证可用：小米云备份 1.12.1.6.62.3 + Play 版微信。
 
-- 云备份在生成备份项列表时（`z1.I0`），只有 `Z0.d.g(Context, "com.tencent.mm")` 返回 true，才会把「微信数据」项加进列表。勾选状态维护（`Z0.s`）和账号侧开关（`H1.A`）用的也是同一个判定，不过时会把已保存的勾选直接清掉。
-- `g()` 的判定链是 `f(Context, PackageInfo)` → `h(...) && !hasSplits(packageInfo)`，其中 `hasSplits` 检查 `PackageInfo.splitNames` 是否非空（`com.miui.cloudbackup.utils.a.g`）。
-- 国内版微信是单个 APK 安装，`splitNames` 为空，通过。Play 版微信经 App Bundle 分发，装机带配置分体包，`splitNames` 非空，被判成「不支持」，备份项直接消失。
-- 微信数据备份项本身只有 DATA 类型，备份的是数据目录，和分体包没有关系。这个判定本来是给 APK 备份/恢复用的，被数据项共用后成了误伤。
+## 要求
 
-## 模块做法
+- 已 root 的安卓设备，装有 LSPosed（或兼容的 Xposed 框架）
+- 小米云备份（`com.miui.cloudbackup`）
 
-作用域只有一个：`com.miui.cloudbackup`。两层 hook，任一层生效即可：
+## 安装
 
-1. 精确层：hook `Z0.d` 的 `g` / `f`，对 `com.tencent.mm`、`com.tencent.mobileqq` 直接返回 true。类名是 1.12.1.6.62.3 的混淆名，云备份升级改名后这层会自动失效。
-2. 通用层：hook 云备份进程内的 `PackageManager.getPackageInfo`，把微信/QQ 返回结果的 `splitNames` 置空，让原判定自己通过。不依赖目标应用混淆名。
+1. 去 [Releases](https://github.com/Yinhono/WeChatCloudBackupFix/releases) 下载最新的 `WeChatCloudBackupFix.apk` 并安装。
+2. 打开 LSPosed，启用本模块，作用域勾选「云备份」（模块已在清单里声明，一般会被自动推荐）。
+3. 强行停止一次云备份，再重新打开。
+4. 进入云备份的备份项管理，「微信/QQ 数据」一组里应该能重新看到微信数据，勾上即可备份。
 
-## 使用
+## 原理
 
-1. 安装 `WeChatCloudBackupFix.apk`。
-2. 在 LSPosed 里启用模块，作用域勾选「云备份」（`com.miui.cloudbackup`），模块已在清单里声明该作用域，一般会被自动推荐。
-3. 强行停止一次云备份再重新打开，进备份项管理，「微信/QQ 数据」里应该能看到微信数据并可勾选备份。
+对云备份 1.12.1.6.62.3 的逆向结论：
 
-工程里带了一份不依赖 Gradle 的 `build-manual.sh`，用 JDK + Android SDK 工具链手动打包，产物在 `build-manual/WeChatCloudBackupFix.apk`，用调试证书签名（Xposed 模块不需要正式签名）。也可以直接用 Android Studio / Gradle 打开工程构建。
+备份项列表生成时，微信数据项是否出现由支持性判定 `Z0.d.g(Context, String)` 决定，勾选状态的维护和账号侧开关用的也是同一处判定，不过时还会把已保存的勾选清掉。这个判定最后落到一条规则上：应用不能带分体包，即 `PackageInfo.splitNames` 必须为空。这个检查本是给 APK 备份/恢复用的，而微信数据项的类型只有 DATA，备的是数据目录，和分体包毫无关系，判定被共用之后就成了误伤。
 
-## 注意
+模块做了两层处理，任一层生效即可：
 
-- 结论和 hook 点来自对 1.12.1.6.62.3 的静态分析，APK 已实际编译打包并核验过清单与 dex 内容。2026-11-02 已在真机验证可用（云备份 1.12.1.6.62.3，Play 版微信数据项恢复显示并可备份）。其他云备份版本未逐一验证。
-- 恢复微信数据时，小米自己就有版本兼容出错的提示，跨版本恢复请谨慎。
-- 云备份升级到新版本后，如果两层都失效，把新版 APK 发我，我重新对一遍判定点。
+1. **精确层**：直接 hook `Z0.d` 的 `g` / `f`，对 `com.tencent.mm` 和 `com.tencent.mobileqq` 返回「支持」。类名来自 1.12.1.6.62.3 的混淆结果，云备份升级改名后这层自动失效。
+2. **通用层**：hook 云备份进程内的 `PackageManager.getPackageInfo`，把微信和 QQ 查询结果里的 `splitNames` 置空，让原判定自己走通。不依赖目标应用的混淆名，版本适应性更好。
+
+作用域只有云备份一个应用，不碰微信本身，也不改任何备份数据。
+
+## 构建
+
+常规方式：用 Android Studio 打开工程直接构建，或命令行 `./gradlew :app:assembleRelease`（需要 Android SDK 35 和 JDK 17，Xposed API 依赖为 `compileOnly`，不会打包进 APK）。
+
+工程还附带一个不依赖 Gradle 的脚本，适合只有裸工具链的环境：
+
+```bash
+./build-manual.sh   # 产物在 build-manual/WeChatCloudBackupFix.apk，调试证书签名
+```
+
+## 兼容性
+
+- 已验证：云备份 1.12.1.6.62.3。其他版本有通用层兜底，理论上可用，但没有逐一测过。
+- 如果云备份升级后微信数据项还是不出现，多半是判定逻辑变了，把新版云备份 APK 提个 issue 附上，我再对一遍。
+- 恢复微信数据时注意版本兼容：新版微信的数据恢复到旧版上可能出错，这是微信数据本身的特性，小米在恢复界面也有同样提示，和本模块无关。
+
+## 免责声明
+
+本模块通过 Xposed 框架修改系统应用的运行时行为，仅供个人设备上的学习与自救使用。使用前请自行确认重要数据另有备份，因使用本模块产生的任何数据问题与作者无关。
+
+## License
+
+[MIT](LICENSE)
