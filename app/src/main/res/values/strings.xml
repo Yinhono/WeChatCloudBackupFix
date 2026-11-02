@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">微信云备份修复</string>
+    <string name="xposed_description">让小米云备份可以备份 Play 版微信/QQ 数据：绕过分体包（split APK）判定</string>
+</resources>
